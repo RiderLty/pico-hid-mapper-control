@@ -1,0 +1,177 @@
+name: build
+
+# 每次推送 main 都重新打包，并滚动更新同一个 Release（tag: rolling）。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 连续推送时取消旧任务，保证 Release 始终是最后一次提交的产物。
+concurrency:
+  group: rolling-build
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          check-latest: true
+
+      - name: 计算时间戳版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $tz = [TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')
+          $now = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
+          $stamp = $now.ToString('yyyyMMdd-HHmmss')
+          $version = $now.ToString('yyyy.MM.dd.HHmm')
+          "stamp=$stamp" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "版本: $version  时间戳: $stamp"
+
+      - name: 安装依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+
+      - name: 导入自检
+        shell: pwsh
+        run: |
+          python -c "import control_core, control_app, remote_control, serial_transport, winusb_transport, windows_keyboard; print('imports ok')"
+          python remote_control.py --help
+
+      - name: 单元测试
+        shell: pwsh
+        continue-on-error: true
+        run: python -m unittest discover -s tests -p test_pyctrl.py -v
+
+      - name: 生成版本资源
+        shell: python
+        env:
+          BUILD_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          import os, pathlib
+          ver = os.environ["BUILD_VERSION"]
+          a, b, c, d = (int(x) for x in ver.split("."))
+          text = f"""VSVersionInfo(
+            ffi=FixedFileInfo(
+              filevers=({a}, {b}, {c}, {d}),
+              prodvers=({a}, {b}, {c}, {d}),
+              mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)
+            ),
+            kids=[
+              StringFileInfo([StringTable('080404b0', [
+                StringStruct('CompanyName', 'RiderLty'),
+                StringStruct('FileDescription', 'Pico HID Mapper 控制端'),
+                StringStruct('FileVersion', '{ver}'),
+                StringStruct('InternalName', 'pico-hid-mapper-control'),
+                StringStruct('LegalCopyright', 'GPL-3.0'),
+                StringStruct('OriginalFilename', 'pico-hid-mapper-control.exe'),
+                StringStruct('ProductName', 'Pico HID Mapper 控制端'),
+                StringStruct('ProductVersion', '{ver}')
+              ])]),
+              VarFileInfo([VarStruct('Translation', [2052, 1200])])
+            ]
+          )
+          """
+          out = pathlib.Path(os.environ["RUNNER_TEMP"], "version_info.txt")
+          out.write_text(text, encoding="utf-8")
+          print(out.read_text(encoding="utf-8"))
+
+      - name: 打包单文件 EXE
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name pico-hid-mapper-control `
+            --paths "." `
+            --hidden-import pygame._sdl2.controller `
+            --hidden-import serial.tools.list_ports `
+            --icon "icon.png" `
+            --add-data "icon.png;." `
+            --version-file "$env:RUNNER_TEMP\version_info.txt" `
+            --distpath "dist" --workpath "build" --specpath "build" `
+            "start.pyw"
+          $asset = "pico-hid-mapper-control-${{ steps.ver.outputs.stamp }}.exe"
+          Rename-Item "dist\pico-hid-mapper-control.exe" $asset
+          Get-Item "dist\$asset" | Select-Object Name, Length
+          "asset=$asset" >> $env:GITHUB_OUTPUT
+        id: pack
+
+      - name: 生成 Release 说明
+        shell: python
+        env:
+          BUILD_STAMP: ${{ steps.ver.outputs.stamp }}
+          BUILD_VERSION: ${{ steps.ver.outputs.version }}
+          ASSET: ${{ steps.pack.outputs.asset }}
+        run: |
+          import hashlib, os, pathlib, subprocess
+
+          asset = os.environ["ASSET"]
+          version = os.environ["BUILD_VERSION"]
+          stamp = os.environ["BUILD_STAMP"]
+
+          msg = subprocess.run(
+              ["git", "log", "-1", "--pretty=%B"],
+              check=True, capture_output=True,
+          ).stdout.decode("utf-8").strip()
+          sha = subprocess.run(
+              ["git", "rev-parse", "--short", "HEAD"],
+              check=True, capture_output=True, text=True,
+          ).stdout.strip()
+          digest = hashlib.sha256(pathlib.Path("dist", asset).read_bytes()).hexdigest()
+
+          run_url = "{}/{}/actions/runs/{}".format(
+              os.environ["GITHUB_SERVER_URL"],
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["GITHUB_RUN_ID"],
+          )
+          notes = "\n".join([
+              msg,
+              "",
+              "---",
+              "",
+              "| 项 | 值 |",
+              "| --- | --- |",
+              f"| 版本 | `{version}` |",
+              f"| 构建时间 | {stamp} (UTC+8) |",
+              f"| 提交 | `{sha}` |",
+              f"| 文件 | `{asset}` |",
+              f"| SHA256 | `{digest}` |",
+              f"| 工作流 | [运行记录]({run_url}) |",
+              "",
+              "> 滚动构建：本 Release 每次提交都会被覆盖，只保留最新一次产物。",
+              "",
+          ])
+          pathlib.Path("release-notes.md").write_text(notes, encoding="utf-8")
+          print(notes)
+
+      - name: 发布滚动 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAMP: ${{ steps.ver.outputs.stamp }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          ASSET: ${{ steps.pack.outputs.asset }}
+        run: |
+          gh release view rolling --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete rolling --yes --cleanup-tag
+          }
+          gh release create rolling "dist\$env:ASSET" `
+            --title "pico-hid-mapper-control $env:VERSION ($env:STAMP)" `
+            --notes-file release-notes.md `
+            --target $env:GITHUB_SHA
+          gh release view rolling --json url,tagName,assets
