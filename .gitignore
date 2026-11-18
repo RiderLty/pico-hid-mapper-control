@@ -1,0 +1,9 @@
+__pycache__/
+.venv-build/
+build/
+dist/
+pico.config.ini
+pico.config.ini.tmp
+controller.log*
+.DS_Store
+*.pyc
