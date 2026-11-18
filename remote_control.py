@@ -2,8 +2,8 @@
 """Pico 本地键鼠手柄控制器，通过 WinUSB 或上游串口固件转发输入。
 
 Windows: py -m pip install pygame
-         py pyctrl/remote_control.py --check
-         py pyctrl/remote_control.py
+         py remote_control.py --check
+         py remote_control.py
 Esc 正常转发。Ctrl+Shift+Alt+Q 释放或重新捕获输入。
 启动后在同一窗口连接设备、开始或释放独占。--help 查看命令行选项。
 """
