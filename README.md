@@ -1,5 +1,9 @@
 # pico-hid-mapper 控制端（Windows）
 
+[![build](https://github.com/RiderLty/pico-hid-mapper-control/actions/workflows/build.yml/badge.svg)](https://github.com/RiderLty/pico-hid-mapper-control/actions/workflows/build.yml)
+
+> 想直接用现成 EXE：到 [Releases](https://github.com/RiderLty/pico-hid-mapper-control/releases/latest) 下载滚动构建。每次提交自动重新打包，版本号就是构建时间戳。
+
 Pico HID Mapper 的 Windows 本地控制端：在本地窗口捕获键盘、鼠标和 SDL 支持的手柄，
 通过 WinUSB 或串口向 Pico 发送同一套 `55 AA` 控制帧。Esc 会正常发送给 Pico。
 
