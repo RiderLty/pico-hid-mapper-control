@@ -92,15 +92,18 @@ jobs:
           print(out.read_text(encoding="utf-8"))
 
       - name: 打包单文件 EXE
+        id: pack
         shell: pwsh
         run: |
+          # 资源路径必须是绝对路径：--specpath 在 build/ 下，相对路径会按 spec 位置解析
+          $root = (Get-Location).Path
           python -m PyInstaller --noconfirm --clean --onefile --windowed `
             --name pico-hid-mapper-control `
             --paths "." `
             --hidden-import pygame._sdl2.controller `
             --hidden-import serial.tools.list_ports `
-            --icon "icon.png" `
-            --add-data "icon.png;." `
+            --icon "$root\icon.png" `
+            --add-data "$root\icon.png;." `
             --version-file "$env:RUNNER_TEMP\version_info.txt" `
             --distpath "dist" --workpath "build" --specpath "build" `
             "start.pyw"
@@ -108,7 +111,6 @@ jobs:
           Rename-Item "dist\pico-hid-mapper-control.exe" $asset
           Get-Item "dist\$asset" | Select-Object Name, Length
           "asset=$asset" >> $env:GITHUB_OUTPUT
-        id: pack
 
       - name: 生成 Release 说明
         shell: python
